@@ -1,6 +1,5 @@
 # DAEVI
-The code resource for Depth-aware Endoscopic Video Inpainting. Currently, only the inference code is released, the full code will be released upon the acceptance.
+The code repository for Depth-Aware Endoscopic Video Inpainting. Currently, only the inference code is available. The full code will be released upon acceptance.
 
-
-## References 
-- repository: </url>[Endo-STTN]((https://github.com/endomapper/Endo-STTN)).
+## References
+- Repository: [Endo-STTN](https://github.com/endomapper/Endo-STTN).
