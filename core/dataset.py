@@ -64,15 +64,14 @@ class Dataset(torch.utils.data.Dataset):
             # masks.append(all_masks[idx]) #Rema removed to add our own masks # Readded again to use random masks
             
             
-            # Added by Rema to add our own masks
             m = ZipReader.imread('{}/{}/Annotations/{}.zip'.format(
                 self.args['data_root'], self.args['name'], video_name), zfilelist[idx]).convert('RGB')
             m = m.resize(self.size)
             m = np.array(m.convert('L'))
-            m = np.array(m > 199).astype(np.uint8) #Rema:from 0 to 199 changes to binary better
+            m = np.array(m > 199).astype(np.uint8) 
             if self.Dil !=0:
                 m = cv2.dilate(m, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (self.Dil,self.Dil)), iterations=1) # Rema:Dilate only 1 iteration change 3,3 to 55(tried it in quantifyResults.ipyb
+                    cv2.MORPH_ELLIPSE, (self.Dil,self.Dil)), iterations=1) 
            
             erase=m
             M = np.float32([[1,0,50],[0,1,0]])
