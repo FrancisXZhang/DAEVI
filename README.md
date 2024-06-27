@@ -3,6 +3,11 @@ The code repository for Depth-Aware Endoscopic Video Inpainting. The pre-trained
 
 ![image](Image/Framework.png)
 
+## Training
+```
+python train.py --model DAS_TransD_Re_DE --config configs/Depth_DTrans_UnFlow_24g.json
+```
+
 ## Inference
 ```
 python test.py  --gpu 0 --overlaid --output results/DAEVI_Output/ --frame datasets/EndoSTTN_dataset/JPEGImages --mask datasets/EndoSTTN_dataset/Annotations --model DAEVI -c release_model/DAEVI_24g -cn 20 --zip --ref_num 10
