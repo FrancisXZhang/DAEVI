@@ -5,7 +5,7 @@ The code repository for Depth-Aware Endoscopic Video Inpainting. The pre-trained
 
 ## Training
 ```
-python train.py --model DAEVI --config configs/{Your Config File Path}.json
+python train.py --model DAEVI --config {Your Config File Path}.json
 ```
 
 ## Inference
