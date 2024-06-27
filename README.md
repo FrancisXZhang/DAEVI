@@ -1,7 +1,7 @@
 # DAEVI (Depth-Aware Endoscopic Video Inpainting)
 The code repository for Depth-Aware Endoscopic Video Inpainting.
 
-![image](Network_Overview.png)
+![image](Image\Framework.png)
 
 ## Inference
 python test.py  --gpu 0 --overlaid --output results/DAEVI_Output/ --frame datasets/EndoSTTN_dataset/JPEGImages --mask datasets/EndoSTTN_dataset/Annotations --model DAEVI -c release_model/DAEVI_24g -cn 20 --zip --ref_num 10
