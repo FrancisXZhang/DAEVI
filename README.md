@@ -1,4 +1,4 @@
-# DAEVI
+# DAEVI (Depth-Aware Endoscopic Video Inpainting)
 The code repository for Depth-Aware Endoscopic Video Inpainting.
 
 ## Inference
