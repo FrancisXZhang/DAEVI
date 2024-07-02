@@ -1,6 +1,8 @@
 # DAEVI (Depth-Aware Endoscopic Video Inpainting)
 The code repository for Depth-Aware Endoscopic Video Inpainting. The pre-trained model for our paper could be found at [here](https://drive.google.com/drive/folders/1vYsUxgmtsQ7V61nIbGEf2kANzsp8Cj9D?usp=sharing).
 
+More example cases will be available soon.
+
 ![image](Image/Framework.png)
 
 ## Training
