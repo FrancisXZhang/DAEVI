@@ -20,8 +20,7 @@ from core.utils import Stack, ToTorchFormatTensor
 
 # depth libs
 from depth_layers import disp_to_depth
-from depth_model.depth_decoder import DepthDecoder
-from depth_model.resnet_encoder import ResnetEncoder
+
 
 import logging
 
