@@ -1,0 +1,42 @@
+{
+    "gpu": "6,7",
+    "seed": 2020,
+    "save_dir": "release_model/",
+    "data_loader": {
+        "name": "EndoSTTN_dataset",
+        "data_root": "/home2/slxb76/Surgical_Inpainting/STTN/Endo-STTN/datasets/",
+        "w": 288,
+        "h": 288,
+        "sample_length": 5,
+        "Dil": 8,
+        "frame_limit": 927
+    },
+    "losses": {
+        "hole_weight": 1,
+        "valid_weight": 1,
+        "adversarial_weight": 0.01,
+        "depth_weight": 0.1,
+        "valid_depth_weight": 0.1,
+        "perceptual_weight": 0.1,
+        "style_weight": 250,
+        "GAN_LOSS": "hinge"
+    },
+    "trainer": {
+        "type": "Adam",
+        "beta1": 0,
+        "beta2": 0.99,
+        "lr": 1e-4,
+        "d2glr": 1,
+        "batch_size": 4,
+        "num_workers": 2,
+        "verbosity": 2,
+        "log_step": 100,
+        "save_freq": 1e3,
+        "valid_freq": 1e3,
+        "iterations": 5e4,
+        "niter": 30e4,
+        "niter_steady": 30e4,
+        "depth_model_path": "Model_MIA"
+    }
+}
+
