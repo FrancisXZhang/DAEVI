@@ -17,6 +17,7 @@ python test.py  --gpu 0 --overlaid --output results/DAEVI_Output/ --frame datase
 ```
 ## References
 - Repository: [Endo-STTN](https://github.com/endomapper/Endo-STTN).
+- Repository: [AF-SfMLearner](https://github.com/ShuweiShao/AF-SfMLearner).
 
 ## Citing
 
