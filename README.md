@@ -6,6 +6,18 @@ If you encounter any difficulty in implementing our work, please feel free to co
 
 ![image](Image/Framework.png)
 
+## Preparation
+To run our code, you need to prepare the depth pseudo ground truth for your data. In our experiments, we generated our depth pseudo ground truth using [AF-SfMLearner](https://github.com/ShuweiShao/AF-SfMLearner). To reproduce our work, you can find the extracted depth data at this [link](https://durhamuniversity-my.sharepoint.com/:f:/g/personal/slxb76_durham_ac_uk/EsY9YfrENMFMqV6FIMHoZ4EBgTlEzdoal7oN8xX2WozgOw?e=Vrxp5a).
+
+Due to the size of the depth data, only the test set depth ground truth is currently uploaded. The full dataset will be made available once a more efficient data-sharing method is implemented.
+
+## Installation
+
+```
+pip install -r requirement.txt
+```
+
+
 ## Training
 ```
 python train.py --model DAEVI --config {Your Config File Path}.json
