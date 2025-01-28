@@ -12,6 +12,7 @@ To run our code, you need to prepare the depth pseudo ground truth for your data
 Due to the size of the depth data, only the test set depth ground truth is currently uploaded. The full dataset will be made available once a more efficient data-sharing method is implemented.
 
 ## Installation
+The Python version used in this code is Python 3.8.5.
 
 ```
 pip install -r requirement.txt
