@@ -20,20 +20,15 @@ from core.utils import Stack, ToTorchFormatTensor
 
 # depth libs
 from depth_layers import disp_to_depth
+from depth_model.depth_decoder import DepthDecoder
+from depth_model.resnet_encoder import ResnetEncoder
 
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 import logging
 
-# Configure logging with time format
-logging.basicConfig(
-    filename='test_DAS_faster.log',
-    filemode='w',
-    format='%(name)s - %(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    level=logging.INFO
-)
-# set the logging level
-logging.getLogger().setLevel(logging.DEBUG)
+
 
 parser = argparse.ArgumentParser(description="STTN")
 parser.add_argument("-f", "--frame", type=str, required=True)
@@ -50,8 +45,22 @@ parser.add_argument("-g", "--gpu", type=str, default="7", required=True)
 parser.add_argument("-d", "--Dil", type=int, default=8)
 parser.add_argument("-r", "--readfiles", action='store_true')
 parser.add_argument("--ref_num", type=int, default=-1)
+parser.add_argument("--log_name", type=str, default='test_re.log')
+
 
 args = parser.parse_args()
+# Configure logging with time format
+logging.basicConfig(
+    filename= args.log_name,
+    filemode='w',
+    format='%(name)s - %(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    level=logging.INFO
+)
+
+# set the logging level
+logging.getLogger().setLevel(logging.DEBUG)
+
 
 
 ref_length = 10
@@ -95,10 +104,10 @@ def read_mask(mpath):
         m = Image.open(os.path.join(mpath, m))
         sz=m.size
         m = np.array(m.convert('L'))
-        m = np.array(m > 199).astype(np.uint8) 
+        m = np.array(m > 199).astype(np.uint8) #Rema:from 0 to 199 changes to binary better
         if args.Dil !=0:
             m = cv2.dilate(m, cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (args.Dil, args.Dil)), iterations=1) 
+                cv2.MORPH_ELLIPSE, (args.Dil, args.Dil)), iterations=1) #Rema:Dilate only 1 iteration
         if args.shifted:
             M = np.float32([[1,0,50],[0,1,0]])
             m_T = cv2.warpAffine(m,M,sz)  
@@ -115,6 +124,11 @@ def read_frames(fpath):
     fnames.sort()
     for f in fnames: 
         f = Image.open(os.path.join(fpath, f))
+#         f = f.resize((w, h), Image.NEAREST)
+#        f = np.array(f)
+#        f = np.array(f > 0).astype(np.uint8)
+#        f = cv2.dilate(f, cv2.getStructuringElement(
+#            cv2.MORPH_CROSS, (3, 3)), iterations=1)
         frames.append(f)
     return frames, fnames
 
@@ -129,7 +143,7 @@ def read_frames_mask_zip(fpath, mpath):
         frames_v = []
         masks_v = []       
         zfilelist = ZipReader.filelist("{}/{}.zip".format(
-            fpath, video_name)) 
+            fpath, video_name)) #used since all_frames counts from 0 whereas zfilelist checks the correct naming of files
         fnames[video_name]=zfilelist
         for zfile in zfilelist: #[:100]:
             img = ZipReader.imread('{}/{}.zip'.format(
@@ -139,10 +153,10 @@ def read_frames_mask_zip(fpath, mpath):
                 mpath, video_name), zfile).convert('RGB')
             sz=m.size
             m = np.array(m.convert('L'))
-            m = np.array(m > 199).astype(np.uint8) 
+            m = np.array(m > 199).astype(np.uint8) #Rema:from 0 to 199 changes to binary better
             if args.Dil !=0:
                 m = cv2.dilate(m, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (args.Dil, args.Dil)), iterations=1) 
+                    cv2.MORPH_ELLIPSE, (args.Dil, args.Dil)), iterations=1) #Rema:Dilate only 1 iteration change 3,3 to 55(tried it in quantifyResults.ipyb
             if args.shifted:
                 M = np.float32([[1,0,50],[0,1,0]])
                 m_T = cv2.warpAffine(m,M,sz)  
@@ -177,7 +191,6 @@ def evaluate(w, h, frames, fnames, masks, video_name, model, device, overlaid, s
     with torch.no_grad():
         # Initialize an empty tensor for storing encoded features
         all_feats = []
-        all_depths = []
 
         # count window number
         window_number = video_length // window_size + 1
@@ -193,28 +206,24 @@ def evaluate(w, h, frames, fnames, masks, video_name, model, device, overlaid, s
             input = (window_feats * (1 - masks[:, start * window_size:end, :, :, :]).float())
             input = input.view(end - start * window_size, 3, h, w)
             encoded_window = model.encoder(input)
-            depth_encoded_window = model.decoder_depth(encoded_window)
-            depth_encoded_window = F.interpolate(depth_encoded_window, scale_factor=1.0/4)
 
             all_feats.append(encoded_window.detach().cpu())
-            all_depths.append(depth_encoded_window.detach().cpu())
 
         logging.info('all_feats: {}'.format(len(all_feats)))
         # Concatenate all encoded features
         feats = torch.cat(all_feats, dim=0)
-        depths = torch.cat(all_depths, dim=0)
 
         logging.info('feats: {}'.format(feats.size()))
         # Reshape feats to match the expected format
         _, c, feat_h, feat_w = feats.size()
         feats = feats.view(1, video_length, c, feat_h, feat_w)
-        depths = depths.view(1, video_length, 1, feat_h, feat_w)
         logging.info('reshaped feats: {}'.format(feats.size()))
     
     print('loading frames and masks from: {}'.format(args.frame))
 
     # completing holes by spatial-temporal transformers
     logging.info('Completing holes by spatial-temporal transformers')
+    all_depths = []
     for f in range(0, video_length, neighbor_stride):
         logging.info('f: {}'.format(f))
         neighbor_ids = [i for i in range(max(0, f-neighbor_stride), min(video_length, f+neighbor_stride+1))]
@@ -224,18 +233,20 @@ def evaluate(w, h, frames, fnames, masks, video_name, model, device, overlaid, s
         with torch.no_grad():
             feats_infer = feats[0, neighbor_ids+ref_ids, :, :, :].to(device)
             mask_infer = masks[0, neighbor_ids+ref_ids, :, :, :].to(device)
-            depths_infer = depths[0, neighbor_ids+ref_ids, :, :, :].to(device)
            
-            
-            feats_infer = model.fusion(feats_infer, depths_infer)
 
-            pred_feat = model.infer(feats_infer, mask_infer)
-
+            pred_feat, d_feat = model.infer_st1(feats_infer, mask_infer)
+            pred_feat, depths = model.infer_st2(pred_feat, d_feat)
+            logging.info('pred_feat: {}'.format(pred_feat.size()))
+            logging.info('depths: {}'.format(depths.size()))
 
             pred_img = torch.tanh(model.decoder(
                 pred_feat[:len(neighbor_ids), :, :, :])).detach()
             pred_img = (pred_img + 1) / 2
             pred_img = pred_img.cpu().permute(0, 2, 3, 1).numpy()*255
+
+            all_depths.append(depths)
+
             for i in range(len(neighbor_ids)):
                 idx = neighbor_ids[i]
                 if args.overlaid:
@@ -288,6 +299,7 @@ def evaluate(w, h, frames, fnames, masks, video_name, model, device, overlaid, s
     predresultpath=os.path.join(savebasepath,"predresult")
     pathlib.Path(predresultpath).mkdir(parents=True, exist_ok=True)
     pred_writer = cv2.VideoWriter(savebasepath+"/predresult.mp4", cv2.VideoWriter_fourcc(*"mp4v"), default_fps, (w, h))
+    logging.info('pred_frames shape: {}'.format(np.array(pred_frames).shape))
     for f in range(video_length):
         output = np.array(pred_frames[f]).astype(np.uint8)
         fnameNew=os.path.basename(fnames[f])
@@ -297,24 +309,28 @@ def evaluate(w, h, frames, fnames, masks, video_name, model, device, overlaid, s
     print('Finish in {}'.format(savebasepath+"/predresult.mp4"))
 
     # save depth results
+    """
     logging.info('save depth results')
     savebasepath=os.path.join(args.output,"gen_"+args.ckptnumber.zfill(5),"full_video",video_name, overlaid, shifted, Dil)
     depthresultpath=os.path.join(savebasepath,"depthresult")
     pathlib.Path(depthresultpath).mkdir(parents=True, exist_ok=True)
     dep_writer = cv2.VideoWriter(savebasepath+"/depthresult.mp4", cv2.VideoWriter_fourcc(*"mp4v"), default_fps, (w, h))
-    depths = F.interpolate(depths, scale_factor=4)
-    depths = (depths + 1) / 2 * max(torch.max(depths), epsilon)
-    depths, _ = disp_to_depth(depths, 0.1, 150)
-    depths, _ = disp_to_depth(depths, 0.1, 150)
+    depths = torch.concatenate(all_depths, 0)
+    logging.info('depths: {}'.format(depths.size()))
+    depths = (depths + 1) / 2
+    
+    
     for f in range(video_length):
-        depth = np.array(depths[0, f, 0, :, :].cpu()).astype(np.uint8)
-        depth = np.repeat(depth[:, :, np.newaxis], 3, axis=2)
-        fnameNew=os.path.basename(fnames[f])
-        cv2.imwrite(depthresultpath+f"/{fnameNew}",depth)
-        dep_writer.write(depth)
+
+            depth = depths[f, 0, :, :].cpu().numpy().astype(np.uint8)  # Select the depth frame
+            logging.info('depths mean: {}'.format(depths.mean()))
+            # save numpy array as .npy file
+            np.save(depthresultpath+f"/{os.path.basename(fnames[f])}", depth)
+
+
     dep_writer.release()
     print('Finish in {}'.format(savebasepath+"/depthresult.mp4"))
-
+    """
 def main_worker():
     overlaid="overlaid" if args.overlaid else "notoverlaid"
     shifted="shifted" if args.shifted else "notshifted"
