@@ -10,7 +10,7 @@ import logging
 
 # Configure logging with time format
 logging.basicConfig(
-    filename= 'SF.log',
+    filename= 'test_log.log',
     filemode='w',
     format='%(name)s - %(asctime)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
@@ -77,18 +77,13 @@ class InpaintGenerator(BaseNetwork):
     def __init__(self, init_weights=True, in_channels=3):
         super(InpaintGenerator, self).__init__()
         channel = 256
-        stack_num = 4
+        stack_num = 8
         #patchsize = [(108, 60), (36, 20), (18, 10), (9, 5)] #removed by rema
         patchsize = [(72, 72), (24, 24), (12, 12), (6, 6)]
         blocks = []
         for _ in range(stack_num):
             blocks.append(TransformerBlock(patchsize, hidden=channel))
         self.transformer = nn.Sequential(*blocks)
-
-        blocks = []
-        for _ in range(stack_num):
-            blocks.append(DepthTransformerBlock(patchsize, hidden=channel))
-        self.transformer_depth = nn.Sequential(*blocks)
 
         self.encoder = nn.Sequential(
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=2, padding=1),
@@ -122,6 +117,8 @@ class InpaintGenerator(BaseNetwork):
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(64, 1, kernel_size=3, stride=1, padding=1)
         )
+        # fusion of features
+        self.fusion = InterleavedGroupConv(channel, channel)
 
         if init_weights:
             self.init_weights()
@@ -140,42 +137,42 @@ class InpaintGenerator(BaseNetwork):
         enc_feat = output['x']
         d_feat = output['d']
 
+        
         # depth estimation
         depths = self.decoder_depth(d_feat)
+        depths = F.interpolate(depths, scale_factor=1.0/4)
 
-        # transformer for depth
-        output = self.transformer_depth(
-            {'x': enc_feat, 'm': masks, 'b': b, 'c': c, 'd': depths})
+        # fusion
+        enc_feat = self.fusion(enc_feat, depths)
+
 
         # decoder
-        output = self.decoder(output['x'])
+        output = self.decoder(enc_feat)
         output = torch.tanh(output)
+        
+        # resize depths
+        depths = F.interpolate(depths, scale_factor=4.0)
 
         return output, depths
 
-
-    def infer(self, enc_feat, masks):
+    def infer_st1(self, enc_feat, masks):
         t, c, h, w = masks.size()
         masks = masks.view(t, c, h, w)
-        
-        b, c, h, w = enc_feat.size()
-        # transformer
         masks = F.interpolate(masks, scale_factor=1.0/4)
+        t, c, _, _ = enc_feat.size()
         output = self.transformer(
-            {'x': enc_feat, 'm': masks, 'b': b, 'c': c, 'd': enc_feat})
+            {'x': enc_feat, 'm': masks, 'b': 1, 'c': c, 'd': enc_feat})
         enc_feat = output['x']
         d_feat = output['d']
+        return enc_feat, d_feat
 
+    def infer_st2(self, enc_feat, d_feat):
 
-        # depth estimation
         depths = self.decoder_depth(d_feat)
+        depths = F.interpolate(depths, scale_factor=1.0/4)
+        enc_feat = self.fusion(enc_feat, depths)
+        depths = F.interpolate(depths, scale_factor=4.0)
 
-        # transformer for depth
-        output = self.transformer_depth(
-            {'x': enc_feat, 'm': masks, 'b': b, 'c': c, 'd': depths})
-
-        enc_feat = output['x']
-        
         return enc_feat, depths
 
 class deconv(nn.Module):
@@ -220,9 +217,6 @@ class InterleavedGroupConv(nn.Module):
         features_after_depth = self.group_conv(features_with_depth)
         return features_after_depth
 
-# #############################################################################
-# ############################# Transformer  ##################################
-# #############################################################################
 
 class Attention(nn.Module):
     """
@@ -235,31 +229,6 @@ class Attention(nn.Module):
         scores.masked_fill(m, -1e9)
         p_attn = F.softmax(scores, dim=-1)
         p_val = torch.matmul(p_attn, value)
-        return p_val, p_attn
-
-class DepthAttention(nn.Module):
-    """
-    Compute 'Scaled Dot Product Attention' with depth information and channel attention.
-    """
-
-    def __init__(self):
-        super(DepthAttention, self).__init__()
-
-
-
-    def forward(self, query, key, value, mask, depth):
-
-        # Compute attention scores using the updated query
-        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(query.size(-1))
-        scores = scores * torch.sigmoid(depth)
-        scores.masked_fill_(mask, float('-inf'))
-        
-        # Compute attention probabilities
-        p_attn = F.softmax(scores, dim=-1)
-        
-        # Apply attention to value vectors
-        p_val = torch.matmul(p_attn, value)
-
         return p_val, p_attn
 
 class MultiHeadedAttention(nn.Module):
@@ -276,15 +245,12 @@ class MultiHeadedAttention(nn.Module):
         self.output_linear = nn.Sequential(
             nn.Conv2d(d_model, d_model, kernel_size=3, padding=1),
             nn.LeakyReLU(0.2, inplace=True))
-        self.dep_output_linear = nn.Sequential(
-            nn.Conv2d(d_model, d_model, kernel_size=3, padding=1),
-            nn.LeakyReLU(0.2, inplace=True))
+        
         
         self.attention = Attention()
         self.value_embedding_le = nn.Conv2d(
             d_model, d_model, kernel_size=3, padding=1, groups = d_model)
         
-
     def forward(self, x, m, b, c, depth_map):
 
         bt, _, h, w = x.size()
@@ -316,14 +282,7 @@ class MultiHeadedAttention(nn.Module):
             value = value.view(b, t, d_k, out_h, height, out_w, width)
             value = value.permute(0, 1, 3, 5, 2, 4, 6).contiguous().view(
                 b,  t*out_h*out_w, d_k*height*width)
-            '''
-            # 2) Apply attention on all the projected vectors in batch.
-            tmp1 = []
-            for q,k,v in zip(torch.chunk(query, b, dim=0), torch.chunk(key, b, dim=0), torch.chunk(value, b, dim=0)):
-                y, _ = self.attention(q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0))
-                tmp1.append(y)
-            y = torch.cat(tmp1,1)
-            '''
+
             y, _ = self.attention(query, key, value, mm)
             # 3) "Concat" using a view and apply a final linear.
             y = y.view(b, t, out_h, out_w, d_k, height, width)
@@ -331,98 +290,10 @@ class MultiHeadedAttention(nn.Module):
             output.append(y)
         output = torch.cat(output, 1)
         x = self.output_linear(output)
-        dep_output = self.dep_output_linear(output)
-        return x, dep_output
+        # dep_output = self.dep_output_linear(output)
+        return x, _
 
-
-class MultiHeadedDepthAttention(nn.Module):
-    """
-    Take in model size and number of heads, modified to incorporate depth information.
-    """
-
-    def __init__(self, patchsize, d_model):
-        super().__init__()
-        self.patchsize = patchsize
-        self.query_embedding = nn.Conv2d(d_model, d_model, kernel_size=1, padding=0)
-        self.key_embedding = nn.Conv2d(d_model, d_model, kernel_size=1, padding=0)
-        self.value_embedding = nn.Conv2d(d_model, d_model, kernel_size=1, padding=0)
-        self.output_linear = nn.Sequential(
-            nn.Conv2d(d_model, d_model, kernel_size=3, padding=1),
-            nn.LeakyReLU(0.2, inplace=True))
-        
-        # Depth encoding
-        self.depth_enc = nn.Sequential(
-            nn.Conv2d(1, d_model, kernel_size=3, stride = 2, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(d_model, 1, kernel_size=3, stride = 2,padding=1),
-            nn.ReLU(inplace=True))
-
-        
-        self.min_attention = DepthAttention()        
-        self.median_attention = DepthAttention()
-        self.max_attention = DepthAttention()
-        self.value_embedding_le = nn.Conv2d(
-            d_model, d_model, kernel_size=3, padding=1, groups = d_model)
-        
-
-    def forward(self, x, m, b, c, depth_map):
-
-        bt, _, h, w = x.size()
-        t = bt // b
-        d_k = c // len(self.patchsize)
-        output = []
-        
-        _query = self.query_embedding(x) 
-        _key = self.key_embedding(x) 
-        _value = self.value_embedding(x) + self.value_embedding_le(x)
-        _depth = self.depth_enc(depth_map)
-
-        for (width, height), query, key, value in zip(self.patchsize,
-                                                      torch.chunk(_query, len(self.patchsize), dim=1), 
-                                                      torch.chunk(_key, len(self.patchsize), dim=1),
-                                                      torch.chunk(_value, len(self.patchsize), dim=1),
-                                                      ):
-            out_w, out_h = w // width, h // height
-            mm = m.view(b, t, 1, out_h, height, out_w, width)
-            mm = mm.permute(0, 1, 3, 5, 2, 4, 6).contiguous().view(b,  t*out_h*out_w, height*width)
-            mm = (mm.mean(-1) > 0.5).unsqueeze(1).repeat(1, t*out_h*out_w, 1)
-
-            depth = _depth.view(b, t, 1, out_h, height, out_w, width)
-            depth = depth.permute(0, 1, 3, 5, 2, 4, 6).contiguous().view(
-                b,  t*out_h*out_w, height*width)
-            min_depth = (depth.min(-1).values).unsqueeze(1).repeat(1, t*out_h*out_w, 1)
-            mean_depth = (depth.median(-1).values).unsqueeze(1).repeat(1, t*out_h*out_w, 1)
-            max_depth = (depth.max(-1).values).unsqueeze(1).repeat(1, t*out_h*out_w, 1)
-            
-            # 1) embedding and reshape
-            query = query.view(b, t, d_k, out_h, height, out_w, width)
-            query = query.permute(0, 1, 3, 5, 2, 4, 6).contiguous().view(
-                b,  t*out_h*out_w, d_k*height*width)
-            key = key.view(b, t, d_k, out_h, height, out_w, width)
-            key = key.permute(0, 1, 3, 5, 2, 4, 6).contiguous().view(
-                b,  t*out_h*out_w, d_k*height*width)
-            value = value.view(b, t, d_k, out_h, height, out_w, width)
-            value = value.permute(0, 1, 3, 5, 2, 4, 6).contiguous().view(
-                b,  t*out_h*out_w, d_k*height*width)
-            '''
-            # 2) Apply attention on all the projected vectors in batch.
-            tmp1 = []
-            for q,k,v in zip(torch.chunk(query, b, dim=0), torch.chunk(key, b, dim=0), torch.chunk(value, b, dim=0)):
-                y, _ = self.attention(q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0))
-                tmp1.append(y)
-            y = torch.cat(tmp1,1)
-            '''
-            y, _ = self.median_attention(query, key, value, mm, mean_depth)
-            y_max, _ = self.max_attention(query, key, value, mm, max_depth)
-            y_min, _ = self.min_attention(query, key, value, mm, min_depth)
-            y = (y + y_max + y_min)/3           
-            # 3) "Concat" using a view and apply a final linear.
-            y = y.view(b, t, out_h, out_w, d_k, height, width)
-            y = y.permute(0, 1, 4, 2, 5, 3, 6).contiguous().view(bt, d_k, h, w)
-            output.append(y)
-        output = torch.cat(output, 1)
-        x = self.output_linear(output)
-        return x, depth_map
+    
 
 
 # Standard 2 layerd FFN of transformer
@@ -440,6 +311,7 @@ class FeedForward(nn.Module):
         x = self.conv(x)
         return x
 
+
 class TransformerBlock(nn.Module):
     """
     Transformer = MultiHead_Attention + Feed_Forward with sublayer connection
@@ -450,31 +322,19 @@ class TransformerBlock(nn.Module):
         self.attention = MultiHeadedAttention(patchsize, d_model=hidden)
         self.feed_forward = FeedForward(hidden)
 
-    def forward(self, x):
-        x, m, b, c, d = x['x'], x['m'], x['b'], x['c'], x['d']
-        res, res_d = self.attention(x, m, b, c, d)
-        x = x + res
-        x = x + self.feed_forward(x)
-        d = d + res_d
-        return {'x': x, 'm': m, 'b': b, 'c': c, 'd': d}
-
-
-class DepthTransformerBlock(nn.Module):
-    """
-    Transformer = MultiHead_Attention + Feed_Forward with sublayer connection
-    """
-
-    def __init__(self, patchsize, hidden=128):
-        super().__init__()
-        self.attention = MultiHeadedDepthAttention(patchsize, d_model=hidden)
-        self.feed_forward = FeedForward(hidden)
+        self.dep_output_linear = nn.Sequential(
+            nn.Conv2d(hidden, hidden, kernel_size=3, padding=1),
+            nn.LeakyReLU(0.2, inplace=True))
 
     def forward(self, x):
         x, m, b, c, d = x['x'], x['m'], x['b'], x['c'], x['d']
         res, _ = self.attention(x, m, b, c, d)
         x = x + res
+        d = d + self.dep_output_linear(x)
         x = x + self.feed_forward(x)
+        
         return {'x': x, 'm': m, 'b': b, 'c': c, 'd': d}
+
 
 # ######################################################################
 # ######################################################################
